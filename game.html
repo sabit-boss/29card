@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>29 - Playing</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="game-container">
+        <!-- Scoreboard -->
+        <div class="scoreboard">
+            <div class="team-score team-a">
+                <h3 id="teamATitle">Team A</h3>
+                <div class="score-value" id="scoreA">0</div>
+                <div class="cards-count" id="cardsA">Cards: 0</div>
+            </div>
+            <div class="team-score team-b">
+                <h3 id="teamBTitle">Team B</h3>
+                <div class="score-value" id="scoreB">0</div>
+                <div class="cards-count" id="cardsB">Cards: 0</div>
+            </div>
+        </div>
+
+        <!-- Host only: abort the round -->
+        <button id="cancelGame" class="btn btn-secondary cancel-btn" style="display:none">✖ Cancel Game</button>
+
+        <!-- Game Table -->
+        <div class="game-table" id="gameTable">
+            <!-- Partner (Top) -->
+            <div class="player-seat seat-top" id="pos-top">
+                <div class="player-name">Partner</div>
+                <div class="cards-container back-cards"></div>
+            </div>
+
+            <!-- Opponent (Left) -->
+            <div class="player-seat seat-left" id="pos-left">
+                <div class="player-name">Opponent</div>
+                <div class="cards-container back-cards"></div>
+            </div>
+
+            <!-- Center - Trick Area -->
+            <div class="trick-area">
+                <div class="trump-indicator" id="trumpIndicator">Trump: <span id="trumpSuit">?</span></div>
+                <div class="trick-cards" id="trickCards">
+                    <div class="trick-slot"><div class="trick-card empty"></div></div>
+                    <div class="trick-slot"><div class="trick-card empty"></div></div>
+                    <div class="trick-slot"><div class="trick-card empty"></div></div>
+                    <div class="trick-slot"><div class="trick-card empty"></div></div>
+                </div>
+                <div class="trick-banner" id="trickBanner"></div>
+                <div class="turn-indicator" id="turnIndicator"></div>
+            </div>
+
+            <!-- Opponent (Right) -->
+            <div class="player-seat seat-right" id="pos-right">
+                <div class="player-name">Opponent</div>
+                <div class="cards-container back-cards"></div>
+            </div>
+
+            <!-- You (Bottom) -->
+            <div class="player-seat seat-bottom" id="pos-bottom">
+                <div class="cards-container your-hand" id="cards0"></div>
+                <div class="player-name">You</div>
+            </div>
+        </div>
+
+        <!-- Chat -->
+        <div class="chat-panel">
+            <div class="chat-messages" id="chatMessages"></div>
+            <div class="chat-input-row">
+                <input type="text" id="chatInput" placeholder="Type a message..." maxlength="100">
+                <button id="chatSend">Send</button>
+            </div>
+        </div>
+
+        <!-- Toast for errors / notices -->
+        <div class="game-toast" id="gameToast"></div>
+
+        <!-- Result Overlay -->
+        <div class="result-overlay" id="resultOverlay" style="display:none">
+            <div class="result-box">
+                <h2 id="resultTitle"></h2>
+                <p id="resultMessage"></p>
+                <div class="result-actions">
+                    <button class="btn btn-success" id="playAgain">▶ Play Again</button>
+                    <span class="play-again-hint" id="playAgainHint" style="display:none">Waiting for the host to start the next round…</span>
+                </div>
+                <button class="btn btn-primary" id="backToLobby">Back to Lobby</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
