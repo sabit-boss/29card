@@ -317,6 +317,7 @@ async def websocket_handler(request):
                 state_json = data.get('state', '')
                 room['game_state'] = state_json
                 room['game_id'] += 1
+                print(f'[server] game-state-sync: broadcasting to room {room["id"]}')
                 await _broadcast(room, {
                     'type': 'game-state-sync',
                     'state': state_json,
@@ -351,11 +352,14 @@ async def websocket_handler(request):
                 # game_state '' means game started but no state synced yet
                 host_ws = room['seats'].get(room['host_seat'], {}).get('ws') if room.get('game_state') is not None else None
                 if host_ws:
+                    print(f'[server] relay action from seat {seat} to host')
                     await _send(host_ws, {
                         'type': 'relay-action',
                         'from': seat,
                         'action': data.get('action', ''),
                     })
+                else:
+                    print(f'[server] relay FAILED: host_ws={host_ws}, game_state={room.get("game_state")!r}')
                 if room is None:
                     continue
                 text = str(data.get('message', ''))[:200]

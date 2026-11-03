@@ -557,8 +557,9 @@ function handleServerMsg(d){
         seats=d.players||seats;
         me=G?G.pid.indexOf(uname):0;
         if(me<0)me=0;
+        console.log('[v10] game-state-sync received: me='+me+', uname='+uname+', G.phase='+G.phase+', G.turn='+G.turn+', G.bid='+G.bid);
         render();
-      }catch(e){}
+      }catch(e){console.error('[v10] game-state-sync parse error:',e)}
     }
   }
   else if(t==='relay-action'){
@@ -566,9 +567,10 @@ function handleServerMsg(d){
     if(isHost){
       try{
         const action=JSON.parse(d.action);
+        console.log('[v10] relay-action from seat '+d.from+':', action);
         apply(d.from, action);
         commit();
-      }catch(e){}
+      }catch(e){console.error('[v10] relay-action error:',e)}
     }
   }
   else if(t==='game-cancelled'){
@@ -586,16 +588,18 @@ async function sync(){
   if(wr){dirty=true;return}
   wr=true;
   try{
+    console.log('[v10] sync: sending game-state, G.phase='+G.phase+', G.turn='+G.turn);
     wSend({type:'game-state',state:JSON.stringify(G)});
     syncErr=0;
-  }catch(e){syncErr=1}
+  }catch(e){syncErr=1;console.error('[v10] sync error:',e)}
   wr=false;
   if(dirty){dirty=false;sync()}
   else if(syncErr){setTimeout(sync,3000);if(G)render()}
 }
 function act(a){
-  if(solo||isHost)return apply(me,a);
+  if(solo||isHost){console.log('[v10] act (host):', a); return apply(me,a)}
   if(me<0)return;
+  console.log('[v10] act (client):', a, 'me='+me);
   wSend({type:'action',a:JSON.stringify(a)});
 }
 function joinT(){
