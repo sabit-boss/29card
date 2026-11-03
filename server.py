@@ -20,8 +20,17 @@ TRICK_PAUSE = 1.5          # how long a completed trick stays on the table
 class Card:
     SUITS = ['hearts', 'diamonds', 'clubs', 'spades']
     RANKS = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A']
-    VALUES = {'A': 11, '10': 10, 'K': 4, 'Q': 3, 'J': 2, '9': 0, '8': 0, '7': 0}
-    STRENGTH = {'A': 13, 'K': 12, 'Q': 11, 'J': 10, '10': 9, '9': 8, '8': 7, '7': 6}
+    # Card points: J=3, 9=2, A=1, 10=1, K/Q/8/7=0 → 28 total
+    # (+1 for the last trick makes 29, which is where the name comes from)
+    VALUES = {'J': 3, '9': 2, 'A': 1, '10': 1, 'K': 0, 'Q': 0, '8': 0, '7': 0}
+    # Strength high → low: J, 9, A, 10, K, Q, 8, 7 (the Jack is the top card)
+    STRENGTH = {'J': 13, '9': 12, 'A': 11, '10': 10, 'K': 9, 'Q': 8, '8': 7, '7': 6}
+
+    # Bidding is in points, not tricks
+    MIN_BID = 16
+    MAX_BID = 29
+    # First team to this many match points wins the match
+    MATCH_TARGET = 6
 
     def __init__(self, suit, rank):
         self.suit = suit
@@ -50,20 +59,27 @@ class Game:
         self.room_id = room_id
         self.players = {}   # seat -> {'ws', 'name', 'token', 'connected'}
         self.hands = {}     # seat -> [Card]
-        self.state = 'waiting'   # waiting | playing | finished
+        self.state = 'waiting'   # waiting | dealing | bidding | dealing2 | playing | finished
         self.trump_suit = None
         self.dealer_seat = None
         self.current_player = None
         self.current_trick = []  # [(seat, Card)]
-        self.teams = self._fresh_teams()
+        self._last_trick_winner = None
+        self.teams = {'A': self._fresh_round(), 'B': self._fresh_round()}
         self.round_number = 0
         self.round_id = 0        # invalidates pending trick-pause tasks
         self.host_seat = None
         self.game_over = None    # {'winningTeam': str|None, 'teams': {...}}
+        # Bidding state
+        self.bids = {}           # seat -> int (or None if passed)
+        self.bid_order = []      # list of seat ids in bidding order
+        self.highest_bid = None  # (bid_value, seat)
+        self.winning_bid = None  # {'bidder': seat, 'bid_value': int, 'trump': suit}
 
     @staticmethod
-    def _fresh_teams():
-        return {'A': {'score': 0, 'cards': 0}, 'B': {'score': 0, 'cards': 0}}
+    def _fresh_round():
+        """Per-round tallies. `match` persists across rounds (it is the score)."""
+        return {'match': 0, 'points': 0, 'tricks': 0}
 
     @property
     def is_full(self):
@@ -76,7 +92,7 @@ class Game:
             if seat not in self.players:
                 self.players[seat] = {
                     'ws': ws,
-                    'name': name,
+                    'name': name or f'Player {seat + 1}',
                     'token': secrets.token_hex(4),
                     'connected': True,
                 }
@@ -104,23 +120,61 @@ class Game:
     # ------------------------------------------------------------------
     # Round lifecycle
     # ------------------------------------------------------------------
-    def start_game(self):
-        if len(self.players) != 4:
-            return False
-        self.state = 'playing'
-        self.round_number += 1
+    def _deal_round(self):
+        """Shuffle, deal all 8 cards each, and open the bidding."""
         self.round_id += 1
-        self.teams = self._fresh_teams()
-        self.game_over = None
+        self.state = 'bidding'
+        self.bids = {}
+        self.highest_bid = None
+        self.current_bidder = 0
+        self.winning_bid = None
+        self.trump_suit = None
         self.current_trick = []
+        self._last_trick_winner = None
+        self.game_over = None
+        # Deal all 32 cards at once (first 4 revealed for bidding, last 4 later)
         deck = Card.create_deck()
         random.shuffle(deck)
         for seat in range(4):
-            self.hands[seat] = deck[seat * 8:(seat + 1) * 8]
-        self.dealer_seat = random.choice(list(self.players.keys()))
-        self.trump_suit = self.hands[self.dealer_seat][7].suit
-        self.current_player = (self.dealer_seat + 1) % 4
+            if seat in self.players:
+                self.hands[seat] = deck[seat * 8:(seat + 1) * 8]
+        # Bidding order: left of dealer goes first
+        self.bid_order = [
+            (self.dealer_seat + i) % 4
+            for i in range(1, 5)
+        ]
+        self.current_player = self.bid_order[0]
+
+    def _rotate_dealer(self):
+        if self.dealer_seat is None:
+            self.dealer_seat = 0          # first round is deterministic
+        else:
+            self.dealer_seat = (self.dealer_seat + 1) % 4   # rotate
+
+    def _reset_round_tallies(self):
+        # Match points carry over between rounds; round tallies reset.
+        for team in self.teams.values():
+            team['points'] = 0
+            team['tricks'] = 0
+
+    def start_game(self):
+        """Start a new round: deal 4 cards to each player, then enter bidding."""
+        if len(self.players) != 4:
+            return False
+        if self.state not in ('waiting', 'finished'):
+            return False
+        self.round_number += 1
+        self._reset_round_tallies()
+        self._rotate_dealer()
+        self._deal_round()
         return True
+
+    def redeal(self):
+        """All four passed: throw the cards in and deal again (dealer advances)."""
+        self.round_number += 1
+        self._reset_round_tallies()
+        self._rotate_dealer()
+        self._deal_round()
 
     def cancel_game(self):
         """Host abort: everyone goes back to the lobby."""
@@ -128,11 +182,108 @@ class Game:
         self.hands = {}
         self.current_trick = []
         self.trump_suit = None
-        self.dealer_seat = None
+        # dealer_seat is deliberately kept so rotation continues next round
         self.current_player = None
-        self.teams = self._fresh_teams()
+        # Cancelled match: reset the score entirely
+        self.teams = {'A': self._fresh_round(), 'B': self._fresh_round()}
         self.game_over = None
+        self.bids = {}
+        self.highest_bid = None
+        self.winning_bid = None
+        self.current_bidder = 0
         self.round_id += 1
+
+    def place_bid(self, seat, bid_value):
+        """
+        Place a bid during the bidding phase.
+
+        A bid is a number of card points (Card.MIN_BID..Card.MAX_BID) that the
+        bidder's team promises to capture. 0 means pass. The winner declares
+        the trump suit afterwards, in the dealing2 phase.
+        """
+        if self.state != 'bidding':
+            return {'error': 'Not in bidding phase'}
+        if seat != self.current_player:
+            return {'error': 'Not your turn'}
+
+        try:
+            bid_value = int(bid_value)
+        except (TypeError, ValueError):
+            return {'error': 'Invalid bid'}
+
+        if bid_value == 0:
+            self.bids[seat] = None  # passed
+        else:
+            if bid_value < Card.MIN_BID or bid_value > Card.MAX_BID:
+                return {
+                    'error': f'Bid must be between {Card.MIN_BID} and '
+                             f'{Card.MAX_BID} points'
+                }
+            if self.highest_bid is not None:
+                current_bid, _ = self.highest_bid
+                if bid_value <= current_bid:
+                    return {'error': f'Bid must be higher than {current_bid}'}
+            self.bids[seat] = bid_value
+            self.highest_bid = (bid_value, seat)
+
+        # Move to next bidder
+        self.current_bidder += 1
+        if self.current_bidder >= len(self.bid_order):
+            # Bidding round complete
+            return self._finalize_bidding()
+
+        self.current_player = self.bid_order[self.current_bidder]
+
+        return {
+            'ok': True,
+            'seat': seat,
+            'bid': bid_value,
+            'highestBid': self.highest_bid[0] if self.highest_bid else None,
+            'nextBidder': self.current_player,
+        }
+
+    def _finalize_bidding(self):
+        """All players have bid: pick a winner, or redeal if everybody passed."""
+        if self.highest_bid is None:
+            # Standard rule: four passes means the cards are thrown in.
+            # Do it here so the Game is always left in a consistent state,
+            # whoever is driving (handler, test, ...).
+            self.redeal()
+            return {'redeal': True}
+
+        winner = self.highest_bid[1]
+        # trump stays None until the winner declares it in dealing2.
+        self.winning_bid = {
+            'bidder': winner,
+            'bid_value': self.highest_bid[0],
+            'trump': None,
+        }
+
+        # State: dealing2 → winning bidder picks trump from their hand
+        self.state = 'dealing2'
+        self.current_player = winner
+
+        return {'roundComplete': True, 'winningBid': self.winning_bid}
+
+    def set_trump_from_winners_bid(self, seat, trump_suit):
+        """
+        The winning bidder selects their trump suit from their hand.
+        Called after trump selection phase begins.
+        """
+        if self.state != 'dealing2':
+            return {'error': "Not in trump selection phase"}
+        if seat != self.current_player:
+            return {'error': "Not your turn"}
+        if trump_suit not in Card.SUITS:
+            return {'error': 'Invalid trump suit'}
+        hand_suits = {c.suit for c in self.hands[seat]}
+        if trump_suit not in hand_suits:
+            return {'error': 'You must choose a suit you hold'}
+
+        self.trump_suit = trump_suit
+        self.state = 'playing'
+        self.current_player = seat  # Winner leads first
+        return {'ok': True, 'trumpSuit': trump_suit}
 
     # ------------------------------------------------------------------
     # Play
@@ -151,7 +302,7 @@ class Game:
         if self.current_trick:
             led_suit = self.current_trick[0][1].suit
             if any(c.suit == led_suit for c in hand) and hand[card_index].suit != led_suit:
-                return {'error': f'You must follow {led_suit} while you still have it'}
+                return {'error': f'You must follow {led_suit}'}
 
         card = hand.pop(card_index)
         self.current_trick.append((seat, card))
@@ -184,25 +335,45 @@ class Game:
 
         points = sum(Card.VALUES[c.rank] for _, c in self.current_trick)
         team = 'A' if winner_seat % 2 == 0 else 'B'
-        self.teams[team]['score'] += points
-        self.teams[team]['cards'] += 4
+        self.teams[team]['points'] += points
+        self.teams[team]['tricks'] += 1
+        self._last_trick_winner = winner_seat
         return winner_seat, points
 
     def _finish_round(self):
-        ta = self.teams['A']['cards']
-        tb = self.teams['B']['cards']
-        if ta > tb:
-            winner = 'A'
-        elif tb > ta:
-            winner = 'B'
+        """Count the deal up, settle the contract, and award match points."""
+        # The last trick is worth an extra point: 28 card points + 1 = 29,
+        # which is where the name of the game comes from.
+        if self._last_trick_winner is not None:
+            last_team = 'A' if self._last_trick_winner % 2 == 0 else 'B'
+            self.teams[last_team]['points'] += 1
+
+        bidder = self.winning_bid['bidder'] if self.winning_bid else None
+        bidder_team = 'A' if (bidder or 0) % 2 == 0 else 'B'
+        defender_team = 'B' if bidder_team == 'A' else 'A'
+        bid = self.highest_bid[0] if self.highest_bid else 0
+        bidder_points = self.teams[bidder_team]['points']
+        made = bidder_points >= bid
+
+        # Made the contract -> bidders score. Missed it -> defenders score.
+        if made:
+            self.teams[bidder_team]['match'] += 1
         else:
-            # Same number of tricks: fall back to card points, then a draw.
-            sa, sb = self.teams['A']['score'], self.teams['B']['score']
-            winner = 'A' if sa > sb else ('B' if sb > sa else None)
-        if winner:
-            self.teams[winner]['score'] += 29
+            self.teams[defender_team]['match'] += 1
+
+        match_over = any(t['match'] >= Card.MATCH_TARGET for t in self.teams.values())
+        winner = None
+        if match_over:
+            winner = 'A' if self.teams['A']['match'] >= Card.MATCH_TARGET else 'B'
+
         self.game_over = {
-            'winningTeam': winner,
+            'winningTeam': winner,       # match winner (None while match continues)
+            'matchOver': match_over,
+            'bid': bid,
+            'bidderSeat': bidder,
+            'bidderTeam': bidder_team,
+            'bidMade': made,
+            'bidderPoints': bidder_points,
             'teams': json.loads(json.dumps(self.teams)),
         }
         self.state = 'finished'
@@ -219,6 +390,11 @@ class Game:
     # Messages
     # ------------------------------------------------------------------
     def state_message(self, seat):
+        your_hands = self.hands.get(seat, [])
+        # In bidding phase, players see their first 4 cards; opponents see card counts
+        first_half = [c.to_dict() for c in your_hands[:4]] if self.state == 'bidding' else your_hands
+        counts = {s: min(4, len(h)) if self.state == 'bidding' else len(h)
+                  for s, h in self.hands.items()}
         return {
             'type': 'game-state',
             'roomId': self.room_id,
@@ -227,8 +403,9 @@ class Game:
             'state': self.state,
             'players': {s: p['name'] for s, p in self.players.items()},
             'playerStatus': {s: p['connected'] for s, p in self.players.items()},
-            'yourHand': [c.to_dict() for c in self.hands.get(seat, [])],
-            'handCounts': self.hand_counts(),
+            'yourHand': first_half,
+            'fullHand': None if self.state == 'bidding' else [c.to_dict() for c in your_hands],
+            'handCounts': counts,
             'currentTrick': [
                 {'seat': s, 'card': c.to_dict()} for s, c in self.current_trick
             ],
@@ -238,6 +415,14 @@ class Game:
             'teams': self.teams,
             'roundNumber': self.round_number,
             'gameOver': self.game_over,
+            # Bidding info
+            'bids': self.bids if self.state == 'bidding' else None,
+            'highestBid': self.highest_bid[0] if self.highest_bid else None,
+            'nextBidder': self.current_player if self.state == 'bidding' else None,
+            'winningBid': self.winning_bid if self.state in ('dealing2', 'playing') else None,
+            'minBid': Card.MIN_BID,
+            'maxBid': Card.MAX_BID,
+            'matchTarget': Card.MATCH_TARGET,
         }
 
 
@@ -267,6 +452,12 @@ async def broadcast(room_id, msg):
             pass
 
 
+async def send_full_state(room_id, game):
+    """Send a fresh game-state to every player in the room."""
+    for s in game.players:
+        await send(game.players[s]['ws'], game.state_message(s))
+
+
 async def leave_room(ws, session):
     """Explicitly remove this connection's seat from its current room."""
     room_id = session.get('room_id')
@@ -292,9 +483,14 @@ async def leave_room(ws, session):
 
 async def trick_pause(room_id, round_id, winner_seat):
     """Keep the completed trick on screen briefly, then start the next one."""
+    game = ROOMS.get(room_id)
+    # If the round is already finished (last trick completed), skip the pause.
+    # The client already received the game-over message.
+    if game and game.state != 'playing':
+        return
     await asyncio.sleep(TRICK_PAUSE)
     game = ROOMS.get(room_id)
-    if not game or game.round_id != round_id:
+    if not game or game.round_id != round_id or game.state != 'playing':
         return
     if game.begin_next_trick(winner_seat):
         await broadcast(room_id, {
@@ -366,8 +562,9 @@ async def handle_disconnect(ws, session):
 
 
 def clean_name(raw):
-    name = str(raw or '').strip()[:15]
-    return name or 'Player'
+    """Trim and limit a player-supplied name. May return '' — add_player
+    then assigns a unique 'Player N' so nobody is nameless."""
+    return str(raw or '').strip()[:15]
 
 
 # ----------------------------------------------------------------------
@@ -405,7 +602,7 @@ async def websocket_handler(request):
                 ROOMS[room_id] = game
                 session['room_id'] = room_id
                 session['seat'] = seat
-                session['name'] = name
+                session['name'] = game.players[seat]['name']
                 await send(ws, {
                     'type': 'room-created',
                     'roomId': room_id,
@@ -430,7 +627,7 @@ async def websocket_handler(request):
                     continue
                 session['room_id'] = wanted
                 session['seat'] = seat
-                session['name'] = name
+                session['name'] = target.players[seat]['name']
                 await send(ws, {
                     'type': 'room-joined',
                     'roomId': wanted,
@@ -482,6 +679,9 @@ async def websocket_handler(request):
                     continue
                 if game.host_seat != seat:
                     continue
+                if game.state not in ('waiting', 'finished'):
+                    await send(ws, {'type': 'room-error', 'message': 'A round is already in progress'})
+                    continue
                 if not game.start_game():
                     await send(ws, {'type': 'room-error', 'message': '4 players are required to start'})
                     continue
@@ -489,6 +689,61 @@ async def websocket_handler(request):
                     'type': 'game-started',
                     'roomId': room_id,
                     'roundNumber': game.round_number,
+                })
+
+            elif mt == 'bid':
+                # Player places a bid (in card points) during the bidding phase
+                if game is None or seat is None:
+                    continue
+                bid_val = data.get('bidValue', 0)
+                result = game.place_bid(seat, bid_val)
+                if 'error' in result:
+                    await send(ws, {'type': 'play-error', 'message': result['error']})
+                    continue
+                if result.get('redeal'):
+                    # Four passes: throw the cards in and deal again.
+                    await broadcast(room_id, {
+                        'type': 'redeal',
+                        'message': 'All four passed — redeal',
+                    })
+                    await send_full_state(room_id, game)
+                elif result.get('roundComplete'):
+                    # Bidding is done — deal remaining cards to all players
+                    await broadcast(room_id, {
+                        'type': 'bidding-complete',
+                        'winningBid': result['winningBid'],
+                        'players': game.get_players_info(),
+                    })
+                    # Each player gets their full 8 cards
+                    for s in game.players:
+                        await send(game.players[s]['ws'], {
+                            'type': 'your-hand',
+                            'cards': [c.to_dict() for c in game.hands.get(s, [])],
+                        })
+                    await send_full_state(room_id, game)
+                else:
+                    await broadcast(room_id, {
+                        'type': 'bid-placed',
+                        'seat': result['seat'],
+                        'bid': result['bid'],
+                        'highestBid': result['highestBid'],
+                        'nextBidder': result['nextBidder'],
+                        'bids': game.bids,
+                    })
+
+            elif mt == 'select-trump':
+                # Winning bidder selects their trump suit
+                if game is None or seat is None:
+                    continue
+                trump = data.get('trumpSuit')
+                result = game.set_trump_from_winners_bid(seat, trump)
+                if 'error' in result:
+                    await send(ws, {'type': 'play-error', 'message': result['error']})
+                    continue
+                await broadcast(room_id, {
+                    'type': 'trump-selected',
+                    'trumpSuit': result['trumpSuit'],
+                    'currentPlayer': game.current_player,
                 })
 
             elif mt == 'cancel-game':
@@ -538,10 +793,10 @@ async def websocket_handler(request):
                 if game.state == 'finished':
                     await broadcast(room_id, {
                         'type': 'game-over',
-                        'winningTeam': game.game_over['winningTeam'],
-                        'teams': game.teams,
+                        **game.game_over,
                     })
                 elif result['trickComplete']:
+                    # Only schedule trick_pause if the round isn't finished.
                     asyncio.create_task(trick_pause(
                         room_id, game.round_id, result['trickComplete']['winnerSeat']))
 

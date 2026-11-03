@@ -13,17 +13,61 @@
             <div class="team-score team-a">
                 <h3 id="teamATitle">Team A</h3>
                 <div class="score-value" id="scoreA">0</div>
-                <div class="cards-count" id="cardsA">Cards: 0</div>
+                <div class="cards-count" id="cardsA">Points: 0</div>
             </div>
             <div class="team-score team-b">
                 <h3 id="teamBTitle">Team B</h3>
                 <div class="score-value" id="scoreB">0</div>
-                <div class="cards-count" id="cardsB">Cards: 0</div>
+                <div class="cards-count" id="cardsB">Points: 0</div>
             </div>
         </div>
 
         <!-- Host only: abort the round -->
         <button id="cancelGame" class="btn btn-secondary cancel-btn" style="display:none">✖ Cancel Game</button>
+
+        <!-- Bidding UI -->
+        <div id="biddingPanel" class="bidding-panel" style="display:none">
+            <h3 id="biddingStatus"></h3>
+            <div class="bid-controls">
+                <div class="bid-buttons">
+                    <button class="btn btn-secondary" onclick="placeBid(0)">Pass</button>
+                    <button class="btn btn-primary" onclick="showBidSelector()">Place Bid</button>
+                </div>
+                <div id="bidSelector" class="bid-selector" style="display:none">
+                    <p>Bid the points your team will take (16–29):</p>
+                    <div class="bid-options">
+                        <button class="bid-opt" onclick="confirmBid(16)">16</button>
+                        <button class="bid-opt" onclick="confirmBid(17)">17</button>
+                        <button class="bid-opt" onclick="confirmBid(18)">18</button>
+                        <button class="bid-opt" onclick="confirmBid(19)">19</button>
+                        <button class="bid-opt" onclick="confirmBid(20)">20</button>
+                        <button class="bid-opt" onclick="confirmBid(21)">21</button>
+                        <button class="bid-opt" onclick="confirmBid(22)">22</button>
+                        <button class="bid-opt" onclick="confirmBid(23)">23</button>
+                        <button class="bid-opt" onclick="confirmBid(24)">24</button>
+                        <button class="bid-opt" onclick="confirmBid(25)">25</button>
+                        <button class="bid-opt" onclick="confirmBid(26)">26</button>
+                        <button class="bid-opt" onclick="confirmBid(27)">27</button>
+                        <button class="bid-opt" onclick="confirmBid(28)">28</button>
+                        <button class="bid-opt" onclick="confirmBid(29)">29</button>
+                    </div>
+                    <p class="bid-hint">The winner of the auction declares trump.</p>
+                </div>
+            </div>
+            <div id="bidHistory" class="bid-history"></div>
+        </div>
+
+        <!-- Trump Selection UI (for winning bidder) -->
+        <div id="trumpSelectPanel" class="trump-select-panel" style="display:none">
+            <h3>Choose your trump suit</h3>
+            <p id="trumpSelectHint"></p>
+            <div class="trump-options">
+                <button class="trump-opt" onclick="selectTrump('hearts')">♥ Hearts</button>
+                <button class="trump-opt" onclick="selectTrump('diamonds')">♦ Diamonds</button>
+                <button class="trump-opt" onclick="selectTrump('clubs')">♣ Clubs</button>
+                <button class="trump-opt" onclick="selectTrump('spades')">♠ Spades</button>
+            </div>
+        </div>
 
         <!-- Game Table -->
         <div class="game-table" id="gameTable">

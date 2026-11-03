@@ -29,12 +29,14 @@ function send(data) {
 }
 
 createBtn.addEventListener('click', () => {
-    const name = playerNameInput.value.trim() || 'Player 1';
+    const name = playerNameInput.value.trim();
+    if (!name) { showError('Please enter your name'); playerNameInput.focus(); return; }
     send({ type: 'create-room', playerName: name });
 });
 
 joinBtn.addEventListener('click', () => {
-    const name = playerNameInput.value.trim() || 'Player 2';
+    const name = playerNameInput.value.trim();
+    if (!name) { showError('Please enter your name'); playerNameInput.focus(); return; }
     const code = roomCodeInput.value.trim().toUpperCase();
     if (!code) { showError('Please enter a room code'); return; }
     send({ type: 'join-room', roomId: code, playerName: name });
@@ -86,7 +88,7 @@ ws.onmessage = (e) => {
 
         case 'game-state':
             // We were restored into a room that is already running.
-            if (data.state === 'playing') {
+            if (['playing', 'bidding', 'dealing2'].includes(data.state)) {
                 window.location.href = 'game.html';
             } else if (data.state === 'waiting') {
                 mySeat = data.yourSeat;

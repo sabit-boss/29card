@@ -1,5 +1,6 @@
 const ws = new WebSocket(`ws://${location.host}/ws`);
 const suitSymbols = { hearts: '♥', diamonds: '♦', clubs: '♣', spades: '♠' };
+const suitColors = { hearts: '#e94560', diamonds: '#e94560', clubs: '#eee', spades: '#eee' };
 
 // Position containers: you always sit at the bottom, partner opposite.
 const positions = { bottom: 0, right: 1, top: 2, left: 3 };
@@ -27,14 +28,24 @@ const cancelGameBtn = document.getElementById('cancelGame');
 const gameToast = document.getElementById('gameToast');
 const yourHand = document.getElementById('cards0');
 
+// Bidding elements
+const biddingPanel = document.getElementById('biddingPanel');
+const biddingStatus = document.getElementById('biddingStatus');
+const bidSelector = document.getElementById('bidSelector');
+const bidHistoryEl = document.getElementById('bidHistory');
+const trumpSelectPanel = document.getElementById('trumpSelectPanel');
+const trumpSelectHint = document.getElementById('trumpSelectHint');
+
 let mySeat = null;
 let hostSeat = null;
 let players = {};          // seat -> name
 let playerStatus = {};     // seat -> connected
 let handCounts = {};
-let teams = { A: { score: 0, cards: 0 }, B: { score: 0, cards: 0 } };
+let teams = { A: { match: 0, points: 0, tricks: 0 }, B: { match: 0, points: 0, tricks: 0 } };
 let trump = null;
 let currentPlayer = null;
+let matchTarget = 6;          // first team to this many match points wins
+let gameState = 'waiting';  // waiting | bidding | dealing2 | playing | finished
 
 // ----------------------------------------------------------------------
 // Helpers
@@ -66,7 +77,6 @@ function showToast(msg) {
     showToast._t = setTimeout(() => gameToast.classList.remove('show'), 2600);
 }
 
-// Relative position (0=bottom/me, 1=right, 2=top, 3=left) of a seat.
 function relPos(seat) {
     return ((seat - mySeat) + 4) % 4;
 }
@@ -90,7 +100,6 @@ function renderHand() {
 let currentHand = [];
 
 function renderTable() {
-    // Opponent stacks + names
     for (let rel = 0; rel <= 3; rel++) {
         const container = posContainer(rel);
         if (!container) continue;
@@ -127,10 +136,11 @@ function renderTrick(trick) {
 }
 
 function updateScoreboard() {
-    scoreA.textContent = teams.A.score;
-    scoreB.textContent = teams.B.score;
-    cardsA.textContent = `Cards: ${teams.A.cards}`;
-    cardsB.textContent = `Cards: ${teams.B.cards}`;
+    // `match` is the score (first to +6 wins); `points`/`tricks` are this deal.
+    scoreA.textContent = teams.A.match;
+    scoreB.textContent = teams.B.match;
+    cardsA.textContent = `Points: ${teams.A.points} · Tricks: ${teams.A.tricks}`;
+    cardsB.textContent = `Points: ${teams.B.points} · Tricks: ${teams.B.tricks}`;
 }
 
 function updateTurnIndicator() {
@@ -151,6 +161,78 @@ function setTeamTitles() {
 }
 
 // ----------------------------------------------------------------------
+// Bidding UI
+// ----------------------------------------------------------------------
+function showBidSelector() {
+    bidSelector.style.display = bidSelector.style.display === 'none' ? 'flex' : 'none';
+}
+
+function confirmBid(val) {
+    // The bid is a number of points; the winner declares trump afterwards.
+    send({ type: 'bid', bidValue: val });
+    bidSelector.style.display = 'none';
+}
+
+function updateBiddingUI(data) {
+    biddingPanel.style.display = 'block';
+    trumpSelectPanel.style.display = 'none';
+    bidSelector.style.display = 'none';
+
+    const name = seatName(data.nextBidder ?? mySeat);
+    biddingStatus.textContent = data.nextBidder === mySeat
+        ? 'Your turn to bid!'
+        : `${players[data.nextBidder] || 'Player'} is bidding...`;
+
+    // Show/hide controls based on whose turn it is
+    const bidBtns = biddingPanel.querySelector('.bid-buttons');
+    if (data.nextBidder === mySeat) {
+        bidBtns.style.display = 'flex';
+    } else {
+        bidBtns.style.display = 'none';
+    }
+
+    // Show highest bid
+    const currentHighest = data.highestBid ?? 0;
+    if (currentHighest > 0) {
+        biddingStatus.textContent += ` (Highest: ${currentHighest} pts)`;
+    }
+
+    // Only offer bids that beat the current highest
+    bidSelector.querySelectorAll('.bid-opt').forEach(btn => {
+        btn.disabled = Number(btn.textContent.trim()) <= currentHighest;
+    });
+
+    // Show bid history
+    if (data.bids) {
+        bidHistoryEl.innerHTML = Object.entries(data.bids).map(([seat, bid]) => {
+            const s = Number(seat);   // JSON object keys arrive as strings
+            const bidText = bid ? `${seatName(s)} bid ${bid} pts` : `${seatName(s)} passed`;
+            return `<div>${bidText}</div>`;
+        }).join('');
+    }
+}
+
+function selectTrump(suit) {
+    send({ type: 'select-trump', trumpSuit: suit });
+    trumpSelectPanel.style.display = 'none';
+}
+
+function showTrumpSelection(data) {
+    trumpSelectPanel.style.display = 'block';
+    biddingPanel.style.display = 'none';
+    trumpSelectHint.textContent = `You won with a bid of ${data.winningBid.bid_value}. Choose your trump suit.`;
+
+    // Highlight suits the player holds
+    const btns = trumpSelectPanel.querySelectorAll('.trump-opt');
+    btns.forEach(btn => {
+        const suit = btn.getAttribute('onclick').match(/'([^']+)'/)[1];
+        const hasSuit = currentHand.some(c => c.suit === suit);
+        btn.style.opacity = hasSuit ? '1' : '0.4';
+        btn.disabled = !hasSuit;
+    });
+}
+
+// ----------------------------------------------------------------------
 // Game state
 // ----------------------------------------------------------------------
 function applyState(data) {
@@ -162,14 +244,42 @@ function applyState(data) {
     teams = data.teams || teams;
     trump = data.trumpSuit;
     currentPlayer = data.currentPlayer;
-    currentHand = data.yourHand || [];
+    gameState = data.state;
+    if (data.matchTarget) matchTarget = data.matchTarget;
+
+    // In bidding phase, only show first 4 cards
+    // In other phases, show full hand
+    const displayHand = data.state === 'bidding' ? (data.yourHand || []) : (data.fullHand || data.yourHand || []);
+    currentHand = displayHand;
 
     setTeamTitles();
     renderHand();
     renderTable();
     renderTrick(data.currentTrick || []);
-    trumpSuitEl.textContent = trump ? (suitSymbols[trump] || trump) : '?';
+
+    if (trump) {
+        trumpSuitEl.textContent = suitSymbols[trump] || trump;
+        trumpSuitEl.style.color = suitColors[trump] || '#eee';
+    } else {
+        trumpSuitEl.textContent = '?';
+        trumpSuitEl.style.color = '#888';
+    }
+
     cancelGameBtn.style.display = (mySeat === hostSeat && data.state !== 'waiting') ? 'block' : 'none';
+
+    // Handle bidding UI
+    if (data.state === 'bidding') {
+        updateBiddingUI(data);
+    } else {
+        biddingPanel.style.display = 'none';
+    }
+
+    // Handle trump selection
+    if (data.state === 'dealing2') {
+        showTrumpSelection(data);
+    } else {
+        trumpSelectPanel.style.display = 'none';
+    }
 
     if (data.gameOver) showGameOver(data.gameOver, true);
 }
@@ -178,17 +288,27 @@ function showGameOver(over, immediate) {
     teams = over.teams || teams;
     updateScoreboard();
     const show = () => {
-        const winner = over.winningTeam;
-        if (!winner) {
-            resultTitle.textContent = '🤝 It\'s a Draw!';
-            resultMessage.textContent = 'Nothing separates the teams this round.';
+        const myTeam = mySeat % 2 === 0 ? 'A' : 'B';
+        if (over.matchOver && over.winningTeam) {
+            const iWon = over.winningTeam === myTeam;
+            resultTitle.textContent = iWon ? '🏆 You win the match!'
+                                           : `Team ${over.winningTeam} wins the match!`;
+            resultMessage.textContent = `Final score ${teams.A.match} – ${teams.B.match}`;
         } else {
-            const myTeam = mySeat % 2 === 0 ? 'A' : 'B';
-            const iWon = winner === myTeam;
-            resultTitle.textContent = iWon ? '🏆 You Win!' : `Team ${winner} Wins!`;
-            resultMessage.textContent = iWon
-                ? 'You and your partner take the round!'
-                : 'Better luck next time.';
+            // Round over, match continues: did the bidding team make its contract?
+            const made = over.bidMade;
+            const bidderOnMyTeam = over.bidderTeam === myTeam;
+            if (made) {
+                resultTitle.textContent = bidderOnMyTeam ? '✅ Contract made!'
+                                                        : '❌ They made the contract';
+            } else {
+                resultTitle.textContent = bidderOnMyTeam ? '❌ Contract missed'
+                                                        : '✅ You stopped them!';
+            }
+            const bidderName = players[over.bidderSeat] || 'The bidder';
+            resultMessage.textContent =
+                `${bidderName} bid ${over.bid} and took ${over.bidderPoints} points. ` +
+                `Score ${teams.A.match} – ${teams.B.match} (first to ${matchTarget}).`;
         }
         const iAmHost = mySeat === hostSeat;
         playAgainBtn.style.display = iAmHost ? 'inline-block' : 'none';
@@ -229,8 +349,42 @@ ws.onmessage = (e) => {
             break;
 
         case 'your-hand':
+            // Full hand update (after bidding completes or card played)
             currentHand = data.cards;
             renderHand();
+            break;
+
+        case 'bid-placed':
+            // Update bidding UI for all players (always, to keep live history).
+            // updateBiddingUI() already hides the bid buttons when it isn't
+            // your turn, so the panel stays up with status + history.
+            updateBiddingUI(data);
+            if (mySeat === data.seat) {
+                showToast(data.bid > 0 ? `You bid ${data.bid} pts` : 'You passed');
+            }
+            break;
+
+        case 'bidding-complete':
+            // Bidding is done — the winner now declares trump
+            if (data.winningBid) {
+                biddingPanel.style.display = 'none';
+                trumpSelectPanel.style.display = 'none';
+                showToast(`🎉 ${seatName(data.winningBid.bidder)} won the auction at ${data.winningBid.bid_value} pts`);
+            }
+            break;
+
+        case 'redeal':
+            showToast(data.message || 'All four passed — redeal');
+            biddingPanel.style.display = 'none';
+            trumpSelectPanel.style.display = 'none';
+            bidHistoryEl.innerHTML = '';
+            break;
+
+        case 'trump-selected':
+            trump = data.trumpSuit;
+            trumpSuitEl.textContent = suitSymbols[trump] || trump;
+            trumpSuitEl.style.color = suitColors[trump] || '#eee';
+            showToast(`Trump is ${suitSymbols[trump] || trump}`);
             break;
 
         case 'card-played':
@@ -257,6 +411,10 @@ ws.onmessage = (e) => {
             break;
 
         case 'game-over':
+            teams = data.teams;
+            updateScoreboard();
+            renderTrick([]);
+            trickBanner.classList.remove('show');
             showGameOver(data, false);
             break;
 
@@ -335,3 +493,8 @@ cancelGameBtn.addEventListener('click', () => {
 backToLobby.addEventListener('click', () => {
     window.location.href = 'index.html';
 });
+
+// Expose bid functions globally (used by the inline onclick handlers)
+window.placeBid = (val) => send({ type: 'bid', bidValue: val });
+window.confirmBid = confirmBid;
+window.selectTrump = selectTrump;

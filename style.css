@@ -11,7 +11,7 @@ body {
     min-height: 100vh;
     color: #eee;
     position: relative;
-    overflow: hidden;
+    overflow-y: auto;
 }
 
 body::before {
@@ -651,6 +651,144 @@ h1 {
     padding: 0.4rem 0.9rem;
     font-size: 0.85rem;
     border-radius: 8px;
+}
+
+/* Result overlay actions */
+.result-actions {
+    margin-bottom: 1rem;
+}
+
+/* Bidding Panel */
+.bidding-panel {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -60%);
+    background: rgba(22, 33, 62, 0.97);
+    border: 2px solid #e94560;
+    border-radius: 16px;
+    padding: 1.5rem 2rem;
+    z-index: 50;
+    min-width: 320px;
+    text-align: center;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+
+.bidding-panel h3 {
+    color: #e94560;
+    margin-bottom: 0.5rem;
+}
+
+.bid-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    align-items: center;
+}
+
+.bid-buttons {
+    display: flex;
+    gap: 0.8rem;
+}
+
+.bid-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: center;
+    width: 100%;
+}
+
+.bid-options, .trump-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    justify-content: center;
+}
+
+.bid-opt {
+    padding: 0.4rem 0.8rem;
+    border: 2px solid #a8dadc;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.05);
+    color: #fff;
+    font-size: 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.bid-opt:hover {
+    background: #00b4d8;
+    border-color: #00b4d8;
+}
+
+.trump-selector {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(255,255,255,0.1);
+}
+
+.trump-opt {
+    padding: 0.4rem 0.8rem;
+    border: 2px solid #e94560;
+    border-radius: 8px;
+    background: rgba(233, 69, 96, 0.15);
+    color: #fff;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.trump-opt:hover {
+    background: #e94560;
+}
+
+.bid-history {
+    margin-top: 0.8rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(255,255,255,0.1);
+    text-align: left;
+    font-size: 0.85rem;
+    color: #a8dadc;
+}
+
+.bid-history div {
+    padding: 0.15rem 0;
+}
+
+.bid-hint {
+    margin-top: 0.6rem;
+    font-size: 0.8rem;
+    color: #9aa;
+    font-style: italic;
+}
+
+/* Trump Selection Panel */
+.trump-select-panel {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -60%);
+    background: rgba(22, 33, 62, 0.97);
+    border: 2px solid #0fc06a;
+    border-radius: 16px;
+    padding: 1.5rem 2rem;
+    z-index: 50;
+    min-width: 320px;
+    text-align: center;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+
+.trump-select-panel h3 {
+    color: #0fc06a;
+    margin-bottom: 0.3rem;
+}
+
+.trump-select-panel p {
+    color: #a8dadc;
+    font-size: 0.9rem;
+    margin-bottom: 0.8rem;
 }
 
 /* Result overlay actions */
