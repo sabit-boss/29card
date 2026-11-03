@@ -203,12 +203,22 @@ async def websocket_handler(request):
                     if room_id and room_id != wanted and room:
                         await _handle_disconnect(room, seat, ws)
                     name = _clean_name(data.get('playerName')) or 'Player'
-                    # Find empty seat
+                    # Respect team preference (0 = Team A [seats 0,2], 1 = Team B [seats 1,3])
+                    team = data.get('team')
                     free_seat = None
-                    for i in range(4):
-                        if target['seats'][i] is None:
-                            free_seat = i
-                            break
+                    if isinstance(team, int) and not isinstance(team, bool):
+                        # Try preferred team seats first
+                        team_seats = [0, 2] if team == 0 else [1, 3]
+                        for i in team_seats:
+                            if target['seats'][i] is None:
+                                free_seat = i
+                                break
+                    # Fall back to any empty seat
+                    if free_seat is None:
+                        for i in range(4):
+                            if target['seats'][i] is None:
+                                free_seat = i
+                                break
                     if free_seat is None:
                         await _send(ws, {'type': 'room-error', 'message': 'Room is full'})
                         continue

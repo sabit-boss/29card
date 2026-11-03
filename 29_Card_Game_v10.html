@@ -240,7 +240,7 @@ const cleanN=n=>String(n||'Player').replace(/[<>&"'`\\]/g,'').trim().slice(0,16)
 var syncErr=0;
 const SU=['♠','♥','♦','♣'],RK=['J','9','A','10','K','Q','8','7'],PT={J:3,9:2,A:1,10:1};
 const tm=s=>s%2,pt=c=>PT[c.r]||0,red=c=>c.s===1||c.s===2,cid=c=>c.s+c.r;
-let warnSeen=-1,G=null,solo=false,isHost=false,uid=null,uname='Player',me=0,db=null,tdoc=null,code='',seats=[null,null,null,null],lastN={},baseline=true,tmr=0,hb=16,seenQ=-1,seenT=new Set(),wr=false,dirty=false,lmsg='',wasMine=false,selT=null,dismissId=-1,ml=false,myAv=loadAv(),selP=null,seenR=-1,lastId=-1,overId=-1,lastMsg='',lastRx=0,snOn=loadSn(),ws=null,wsOnline=false;
+let warnSeen=-1,G=null,solo=false,isHost=false,uid=null,uname='Player',me=0,myTeam=-1,db=null,tdoc=null,code='',seats=[null,null,null,null],lastN={},baseline=true,tmr=0,hb=16,seenQ=-1,seenT=new Set(),wr=false,dirty=false,lmsg='',wasMine=false,selT=null,dismissId=-1,ml=false,myAv=loadAv(),selP=null,seenR=-1,lastId=-1,overId=-1,lastMsg='',lastRx=0,snOn=loadSn(),ws=null,wsOnline=false;
 const sh=a=>{for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]]}return a};
 const srt=h=>h.sort((a,b)=>a.s-b.s||a.o-b.o);
 const openSheet=v=>{$('sheet').hidden=!v};
@@ -511,6 +511,7 @@ function handleServerMsg(d){
     isHost=d.hostSeat===0;
     me=d.players?d.players.findIndex(p=>p&&p.name===uname&&p.connected!==false):0;
     if(me<0)me=0;
+    if(me>=0&&myTeam<0)myTeam=me%2;
     inRoom=true;
     renderLobby();
   }
@@ -609,7 +610,7 @@ function joinT(){
   if(!c){lmsg='Enter or generate a table code';renderLobby();return}
   code=c;
   if(!wsOnline)openWs();
-  if(wsOnline)wSend({type:'join-room',roomId:c,playerName:uname});
+  if(wsOnline)wSend({type:'join-room',roomId:c,playerName:uname,team:myTeam});
   else{lmsg='Connecting...';render();setTimeout(()=>joinT(),1000)}
 }
 function generateCode(){
@@ -619,8 +620,20 @@ function generateCode(){
 }
 function sit(i){
   wSend({type:'sit',seat:i});
+  // If this player hasn't chosen a team yet, assign them to the chosen team
+  if(myTeam<0&&seats[i]&&(typeof seats[i].name==='string'&&seats[i].name===uname)){
+    myTeam=i%2;
+  }
   // Set avatar on server
   wSend({type:'set-avatar',avatar:myAv});
+}
+function joinTeam(t){
+  myTeam=t;
+  // Find first available seat on chosen team
+  const teamSeats=[0,2].filter(i=>t===0).concat([1,3].filter(i=>t===1));
+  for(const i of teamSeats){if(seats[i]===null){wSend({type:'sit',seat:i});return}}
+  // Team full, pick any empty seat
+  for(let i=0;i<4;i++){if(seats[i]===null){wSend({type:'sit',seat:i});return}}
 }
 function hostStart(){
   if(seats.filter(s=>s).length<4){lmsg='Need 4 players';return renderLobby()}
@@ -664,12 +677,30 @@ function renderLobby(){
     if(isHost)h+='<small style="color:var(--mut)">You are the host — share this code</small>';
     else h+='<small style="color:var(--mut)">Joined as '+uname+'</small>';
 
+    // Count human players
+    const humanCount=seats.filter(s=>s!==null).length;
+    // Show team selection if not yet chosen and room has humans but isn't full
+    if(myTeam<0&&humanCount<4&&humanCount>0){
+      const teamASeats=[0,2].filter(i=>seats[i]===null);
+      const teamBSeats=[1,3].filter(i=>seats[i]===null);
+      const canJoinA=teamASeats.length>0;
+      const canJoinB=teamBSeats.length>0;
+      h+='<div style="margin-top:10px;text-align:center"><small style="color:var(--mut)">Choose your team</small><div class="pick" style="margin-top:6px">';
+      if(canJoinA)h+='<div class="pk'+(myTeam===0?' sel':'')+'" onclick="joinTeam(0)"><div style="width:40px;height:56px;border:2px solid var(--ac);border-radius:8px;margin:0 auto 4px;display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--ac)">A</div><small>Team A</small></div>';
+      if(canJoinB)h+='<div class="pk'+(myTeam===1?' sel':'')+'" onclick="joinTeam(1)"><div style="width:40px;height:56px;border:2px solid var(--ac);border-radius:8px;margin:0 auto 4px;display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--ac)">B</div><small>Team B</small></div>';
+      h+='</div></div>';
+    }
+
     for(let i=0;i<4;i++){
       const s=seats[i]||null;
       const mine=s&&(typeof s.name==='string'&&s.name===uname);
       const avImg=s?'<span class="pic" style="width:24px;height:24px;display:inline-block">'+avSvg(s.av||0)+'</span>':'';
       const seatLabel=i%2===0?'Team A':'Team B';
-      h+='<div class="seatrow"><span>Seat '+(i+1)+' <small>'+seatLabel+'</small></span><span>'+(s?avImg+s.name+(mine?' (you)':'')+(s.connected===false?' (away)':''):'<small>empty, bot plays</small>')+'</span><button class="sm" onclick="sit('+i+')" '+(s&&!mine?'disabled':'')+'>Sit</button></div>';
+      // Disable sit button if on opponent's team and not already on that team
+      const playerTeam=myTeam>=0?myTeam:i%2;
+      const isOpponent=mine?false:(myTeam>=0&&playerTeam!==(i%2));
+      const sitDisabled=s&&!mine||isOpponent;
+      h+='<div class="seatrow"><span>Seat '+(i+1)+' <small>'+seatLabel+'</small></span><span>'+(s?avImg+s.name+(mine?' (you)':'')+(s.connected===false?' (away)':''):'<small>empty, bot plays</small>')+'</span><button class="sm" onclick="sit('+i+')" '+(sitDisabled?'disabled':'')+'>Sit</button></div>';
     }
     h+='<p class="note" style="margin-top:8px;margin-bottom:0">Seats 1 & 3 are partners · Seats 2 & 4 are partners</p>';
     h+='</div>';
