@@ -487,9 +487,11 @@ function kick(){
 function commit(){render();if(solo){try{localStorage.setItem(SAVEK,JSON.stringify(G))}catch(e){}}kick();if(!solo&&isHost&&G)sync()}
 
 /* ===== multiplayer plumbing (WebSocket) ===== */
+let inRoom=false;  // true when we've joined/created a room
+
 function openWs(){
   ws=new WebSocket('ws://'+location.host+'/ws');
-  ws.onopen=()=>{wsOnline=true;syncErr=0;
+  ws.onopen=()=>{wsOnline=true;syncErr=0;inRoom=false;
     if(lmsg&&lmsg.includes('Online tables'))lmsg='';
     render();
   };
@@ -504,18 +506,12 @@ function handleServerMsg(d){
   const t=d.type;
   if(t==='room-created'||t==='room-joined'){
     code=d.roomId;
-    // Find the name of the player in seat 0 (host)
-    const hostPlayer=d.players?d.players.find(p=>p&&p.seat===0):null;
-    uname=hostPlayer?hostPlayer.name:uname||'Player';
+    uname=d.players?d.players.find(p=>p&&p.seat===0)?.name||uname||'Player':'Player';
     seats=d.players||[];
     isHost=d.hostSeat===0;
-    // Find our seat by name match
     me=d.players?d.players.findIndex(p=>p&&p.name===uname&&p.connected!==false):0;
     if(me<0)me=0;
-    // If we're the only one or gameState is empty, we're the host
-    if(!d.gameState||d.gameState===''){
-      isHost=true;
-    }
+    inRoom=true;
     renderLobby();
   }
   else if(t==='room-updated'){
@@ -577,7 +573,7 @@ function handleServerMsg(d){
     }
   }
   else if(t==='game-cancelled'){
-    G=null;renderLobby();
+    G=null;inRoom=false;code='';renderLobby();
   }
   else if(t==='player-status'){
     // Update player connection status
@@ -604,12 +600,21 @@ function act(a){
   wSend({type:'action',a:JSON.stringify(a)});
 }
 function joinT(){
-  const c=$('code').value.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
-  if(!c){lmsg='Enter a table code';return renderLobby()}
+  const nameInput=$('playerName');
+  const codeInput=$('code');
+  const name=nameInput?nameInput.value.trim():uname;
+  if(!name){lmsg='Please enter your name';renderLobby();return}
+  uname=name;
+  const c=codeInput?codeInput.value.trim().toUpperCase().replace(/[^A-Z0-9]/g,''):code;
+  if(!c){lmsg='Enter or generate a table code';renderLobby();return}
   code=c;
   if(!wsOnline)openWs();
   if(wsOnline)wSend({type:'join-room',roomId:c,playerName:uname});
   else{lmsg='Connecting...';render();setTimeout(()=>joinT(),1000)}
+}
+function generateCode(){
+  code=''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789',k=6));
+  renderLobby();
 }
 function sit(i){
   wSend({type:'sit',seat:i});
@@ -622,9 +627,16 @@ function hostStart(){
 }
 const SAVEK='g29solo';
 const hasSave=()=>{try{return !!localStorage.getItem(SAVEK)}catch(e){return false}};
-function resumeSolo(){try{G=JSON.parse(localStorage.getItem(SAVEK));solo=true;isHost=true;uid='solo';me=0;commit()}catch(e){G=null;lmsg='Could not resume that game.';renderLobby()}}
+function resumeSolo(){
+  if(inRoom&&ws){
+    inRoom=false;code='';G=null;seats=[];
+  }
+  try{G=JSON.parse(localStorage.getItem(SAVEK));solo=true;isHost=true;me=0;commit()}catch(e){G=null;lmsg='Could not resume that game.';renderLobby()}
+}
 function startSolo(){
-  solo=true;isHost=true;uid='solo';me=0;
+  solo=true;isHost=true;me=0;
+  // Leave any room
+  inRoom=false;code='';G=null;seats=[];
   const u=new Set([myAv]);
   G={pid:['solo',null,null,null],names:['You',BN[0],BN[1],BN[2]],bots:[false,true,true,true],av:[myAv,nextAv(u),nextAv(u),nextAv(u)]};
   newRound();commit();
@@ -632,32 +644,60 @@ function startSolo(){
 function renderLobby(){
   let h='<div class="logo"><b>29</b><span>♠<span class="r">♥♦</span>♣</span></div>';
   h+=avPicker();
-  if(!tdoc&&!ws){
-    // No connection yet — show solo + code entry
-    h+='<div class="lcard"><input id="code" placeholder="Table code" maxlength="12" aria-label="Table code"><div style="height:10px"></div><button class="pri" style="width:100%" onclick="joinT()">Create or join table</button></div>'+
-    (hasSave()?'<button class="pri" onclick="resumeSolo()">Resume solo game</button>':'')+'<button class="gold" onclick="startSolo()">Play solo vs bots</button><button onclick="openSheet(true)">How to play</button>'+
-    (lmsg?'<p class="note">'+lmsg+'</p>':'')+
-    '<p class="note">Online: agree on a table code with your friends. The first person to create it is the host. Empty seats are played by bots.</p>';
-  }else if(code){
-    // In a WebSocket room
-    h+='<div class="lcard"><b>Table '+code+'</b>'+(isHost?' <small>you are the host</small>':'');
+
+  if(solo&&G){
+    // Solo game in progress — shouldn't reach here, but just in case
+    h+='<p class="note">Solo game running.</p>';
+  }else if(solo&&!G){
+    // Solo mode, no game running
+    h+='<div class="lcard"><button class="pri" style="width:100%" onclick="startSolo()">Play solo vs bots</button>'+
+    (hasSave()?'<button class="pri" onclick="resumeSolo()" style="margin-top:8px">Resume solo game</button>':'')+
+    '<button onclick="openSheet(true)" style="margin-top:8px">How to play</button></div>';
+  }else if(inRoom&&code){
+    // In a WebSocket room — show room info and seats
+    h+='<div class="lcard">';
+    h+='<div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:4px">';
+    h+='<span style="font-size:18px;font-weight:800;letter-spacing:4px;color:var(--ac)">'+code+'</span>';
+    h+='<button class="sm" onclick="copyCode()" style="padding:4px 10px;font-size:12px" aria-label="Copy code">📋</button>';
+    h+='</div>';
+    if(isHost)h+='<small style="color:var(--mut)">You are the host — share this code</small>';
+    else h+='<small style="color:var(--mut)">Joined as '+uname+'</small>';
+
     for(let i=0;i<4;i++){
       const s=seats[i]||null;
       const mine=s&&(typeof s.name==='string'&&s.name===uname);
       const avImg=s?'<span class="pic" style="width:24px;height:24px;display:inline-block">'+avSvg(s.av||0)+'</span>':'';
-      h+='<div class="seatrow"><span>Seat '+(i+1)+' <small>team '+(i%2?'B':'A')+'</small></span><span>'+(s?avImg+s.name+(mine?' (you)':'')+(s.connected===false?' (away)':''):'<small>empty, bot plays</small>')+'</span><button class="sm" onclick="sit('+i+')" '+(s&&!mine?'disabled':'')+'>Sit</button></div>';
+      const seatLabel=i%2===0?'Team A':'Team B';
+      h+='<div class="seatrow"><span>Seat '+(i+1)+' <small>'+seatLabel+'</small></span><span>'+(s?avImg+s.name+(mine?' (you)':'')+(s.connected===false?' (away)':''):'<small>empty, bot plays</small>')+'</span><button class="sm" onclick="sit('+i+')" '+(s&&!mine?'disabled':'')+'>Sit</button></div>';
     }
-    h+='<p class="note" style="margin-top:8px">Seats 1 and 3 are partners, as are seats 2 and 4.</p></div>';
-    h+=isHost?'<button class="pri" onclick="hostStart()">Start game</button>':'<p class="note">Waiting for the host to start.</p>';
-    if(lmsg)h+='<p class="note">'+lmsg+'</p>';
+    h+='<p class="note" style="margin-top:8px;margin-bottom:0">Seats 1 & 3 are partners · Seats 2 & 4 are partners</p>';
+    h+='</div>';
+    h+=isHost?'<button class="pri" style="margin-top:12px;width:100%" onclick="hostStart()">Start game</button>':
+      '<p class="note" style="margin-top:12px">Waiting for the host to start.</p>';
   }else{
-    // Online mode without a room yet
-    h+='<div class="lcard"><input id="code" placeholder="Table code" maxlength="12" aria-label="Table code"><div style="height:10px"></div><button class="pri" style="width:100%" onclick="joinT()">Create or join table</button></div>'+
-    (hasSave()?'<button class="pri" onclick="resumeSolo()">Resume solo game</button>':'')+'<button class="gold" onclick="startSolo()">Play solo vs bots</button><button onclick="openSheet(true)">How to play</button>'+
-    (lmsg?'<p class="note">'+lmsg+'</p>':'')+
-    '<p class="note">Agree on a table code with your friends. The first person to join creates the room. Empty seats are played by bots.</p>';
+    // Not in a room yet — show lobby with code entry
+    h+='<div class="lcard">';
+    h+='<div class="form-group" style="margin-bottom:12px"><label style="display:block;text-align:left;margin-bottom:4px;font-size:14px">Your Name</label><input id="playerName" placeholder="Enter your name" maxlength="16" style="width:100%;text-align:center"></div>';
+    h+='<div style="display:flex;gap:6px;margin-bottom:8px">';
+    h+='<input id="code" placeholder="Table code" maxlength="8" style="flex:1;text-align:center;text-transform:uppercase;letter-spacing:2px;font-weight:700" aria-label="Table code">'+
+    '<button class="sm" onclick="generateCode()" style="padding:0 14px" aria-label="Generate code">🎲</button>';
+    h+='</div>';
+    h+='<button class="pri" style="width:100%;margin-bottom:8px" onclick="joinT()">Create or join table</button>';
+    h+='</div>';
+    h+='<div class="lcard" style="margin-top:8px">';
+    h+='<button class="gold" style="width:100%;margin-bottom:6px" onclick="startSolo()">Play solo vs bots</button>';
+    if(hasSave())h+='<button class="pri" style="width:100%;margin-bottom:6px" onclick="resumeSolo()">Resume solo game</button>';
+    h+='<button onclick="openSheet(true)">How to play</button>';
+    h+='</div>';
+    if(lmsg)h+='<p class="note">'+lmsg+'</p>';
   }
   $('lobby').innerHTML=h;
+}
+function copyCode(){
+  navigator.clipboard.writeText(code).catch(()=>{});
+  lmsg='Code '+code+' copied!';
+  render();
+  setTimeout(()=>{if(!solo)lmsg=''},2000);
 }
 
 /* ===== rendering ===== */
