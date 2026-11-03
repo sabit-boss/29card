@@ -506,7 +506,8 @@ function handleServerMsg(d){
   const t=d.type;
   if(t==='room-created'||t==='room-joined'){
     code=d.roomId;
-    uname=d.players?d.players.find(p=>p&&p.seat===0)?.name||uname||'Player':'Player';
+    // Only update uname from server if we don't have one yet
+    if(!uname)d.players?.forEach(p=>{if(p&&p.seat===0)uname=p.name});
     seats=d.players||[];
     isHost=d.hostSeat===0;
     me=d.players?d.players.findIndex(p=>p&&p.name===uname&&p.connected!==false):0;
