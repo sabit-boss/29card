@@ -42,10 +42,12 @@ def _room_info(room, ws):
         if s is None:
             seats.append(None)
         else:
+            # A seated player is "connected" if their ws is not None
+            seated = s.get('ws') is not None
             seats.append({
                 'seat': i,
                 'name': s['name'],
-                'connected': s.get('ws') is ws and s.get('connected', True),
+                'connected': seated,
                 'av': s.get('avatar', 0),
             })
     return {
