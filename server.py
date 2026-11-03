@@ -348,7 +348,8 @@ async def websocket_handler(request):
                 if player is None:
                     continue
                 # Forward to host's connection
-                host_ws = room['seats'].get(room['host_seat'], {}).get('ws') if room.get('game_state') else None
+                # game_state '' means game started but no state synced yet
+                host_ws = room['seats'].get(room['host_seat'], {}).get('ws') if room.get('game_state') is not None else None
                 if host_ws:
                     await _send(host_ws, {
                         'type': 'relay-action',

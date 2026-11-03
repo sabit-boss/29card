@@ -553,13 +553,10 @@ function handleServerMsg(d){
     if(d.state){
       try{
         const newState=JSON.parse(d.state);
-        // Only apply if this is a newer game state
-        if(!G || G.id !== newState.id){
-          G=newState;
-          seats=d.players||seats;
-          me=G?G.pid.indexOf(uname):0;
-          if(me<0)me=0;
-        }
+        G=newState;
+        seats=d.players||seats;
+        me=G?G.pid.indexOf(uname):0;
+        if(me<0)me=0;
         render();
       }catch(e){}
     }
