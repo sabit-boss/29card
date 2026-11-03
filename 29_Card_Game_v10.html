@@ -240,7 +240,7 @@ const cleanN=n=>String(n||'Player').replace(/[<>&"'`\\]/g,'').trim().slice(0,16)
 var syncErr=0;
 const SU=['♠','♥','♦','♣'],RK=['J','9','A','10','K','Q','8','7'],PT={J:3,9:2,A:1,10:1};
 const tm=s=>s%2,pt=c=>PT[c.r]||0,red=c=>c.s===1||c.s===2,cid=c=>c.s+c.r;
-let warnSeen=-1,G=null,solo=false,isHost=false,uid=null,uname='Player',me=0,db=null,tdoc=null,code='',seats=[null,null,null,null],lastN={},baseline=true,tmr=0,hb=16,seenQ=-1,seenT=new Set(),wr=false,dirty=false,lmsg='',wasMine=false,selT=null,dismissId=-1,ml=false,myAv=loadAv(),selP=null,seenR=-1,lastId=-1,overId=-1,lastMsg='',lastRx=0,snOn=loadSn();
+let warnSeen=-1,G=null,solo=false,isHost=false,uid=null,uname='Player',me=0,db=null,tdoc=null,code='',seats=[null,null,null,null],lastN={},baseline=true,tmr=0,hb=16,seenQ=-1,seenT=new Set(),wr=false,dirty=false,lmsg='',wasMine=false,selT=null,dismissId=-1,ml=false,myAv=loadAv(),selP=null,seenR=-1,lastId=-1,overId=-1,lastMsg='',lastRx=0,snOn=loadSn(),ws=null,wsOnline=false;
 const sh=a=>{for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]]}return a};
 const srt=h=>h.sort((a,b)=>a.s-b.s||a.o-b.o);
 const openSheet=v=>{$('sheet').hidden=!v};
@@ -446,7 +446,7 @@ function apply(p,a){
   if(!G||p<0)return;
   const t=a.t,h=G.hands[p];
   if(t==='react'){if(['👍','😂','😮','👏','😢','🔥'].includes(a.e)){G.react={q:++G.rq,p,e:a.e};commit()}return}
-  if(t==='undo'){if(!G.hist.length||(!solo&&G.pid[p]!==uid))return;undoHand(p);commit();return}
+  if(t==='undo'){if(!G.hist.length)return;undoHand(p);commit();return}
   if(t==='bid'&&G.phase==='bid'&&G.turn===p){const b=+a.b;if(b===0||(b>=Math.max(16,G.bid+1)&&b<=28))doBid(p,b);else return}
   else if(t==='dbl'&&G.phase==='dbl'&&G.turn===p)doDbl(p,!!a.d);
   else if(t==='rdbl'&&G.phase==='rdbl'&&G.turn===p)doRdbl(p,!!a.d);
@@ -484,71 +484,141 @@ function kick(){
     else if(bt(G.turn))go(900,()=>botPlay(G.turn));
   }
 }
-function commit(){render();if(!solo)sync();else if(G)try{localStorage.setItem(SAVEK,JSON.stringify(G))}catch(e){}kick()}
+function commit(){render();if(solo){try{localStorage.setItem(SAVEK,JSON.stringify(G))}catch(e){}}kick();if(!solo&&isHost&&G)sync()}
 
-/* ===== multiplayer plumbing ===== */
+/* ===== multiplayer plumbing (WebSocket) ===== */
+function openWs(){
+  ws=new WebSocket('ws://'+location.host+'/ws');
+  ws.onopen=()=>{wsOnline=true;syncErr=0;
+    if(lmsg&&lmsg.includes('Online tables'))lmsg='';
+    render();
+  };
+  ws.onmessage=e=>{try{const d=JSON.parse(e.data);handleServerMsg(d)}catch(er){console.error(er)}};
+  ws.onclose=()=>{wsOnline=false;if(solo)return;syncErr=1;setTimeout(openWs,2000)};
+  ws.onerror=()=>{wsOnline=false;syncErr=1};
+}
+function wSend(obj){
+  if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(obj));
+}
+function handleServerMsg(d){
+  const t=d.type;
+  if(t==='room-created'||t==='room-joined'){
+    code=d.roomId;
+    // Find the name of the player in seat 0 (host)
+    const hostPlayer=d.players?d.players.find(p=>p&&p.seat===0):null;
+    uname=hostPlayer?hostPlayer.name:uname||'Player';
+    seats=d.players||[];
+    isHost=d.hostSeat===0;
+    // Find our seat by name match
+    me=d.players?d.players.findIndex(p=>p&&p.name===uname&&p.connected!==false):0;
+    if(me<0)me=0;
+    // If we're the only one or gameState is empty, we're the host
+    if(!d.gameState||d.gameState===''){
+      isHost=true;
+    }
+    renderLobby();
+  }
+  else if(t==='room-updated'){
+    seats=d.players||[];
+    // If gameState is set (non-empty), transition to game
+    if(d.gameState&&d.gameState!==''){
+      try{
+        G=JSON.parse(d.gameState);
+        me=G?G.pid.indexOf(uname):0;
+        if(me<0)me=0;
+      }catch(e){}
+    }
+    renderLobby();
+  }
+  else if(t==='game-started'){
+    // Host signals game start — v10 engine will initialise
+    code=d.roomId;
+    isHost=d.hostSeat===0;
+    seats=d.players||[];
+    // We're now in a game — initialise a fresh round
+    if(isHost){
+      const av=seats.map(p=>p?p.av||0:0);
+      const bots=seats.map(p=>!p);
+      G={pid:seats.map(p=>p?p.name:null),names:seats.map((p,i)=>p?p.name:BN[i]),bots:bots,av:av};
+      newRound();
+      commit();
+      // Immediately push initial state
+      setTimeout(()=>sync(),100);
+    }else{
+      // Non-host: wait for host to send game state
+      lmsg='Waiting for host to start...';
+      renderLobby();
+    }
+  }
+  else if(t==='game-state-sync'){
+    // Full game state broadcast from host
+    if(d.state){
+      try{
+        const newState=JSON.parse(d.state);
+        // Only apply if this is a newer game state
+        if(!G || G.id !== newState.id){
+          G=newState;
+          seats=d.players||seats;
+          me=G?G.pid.indexOf(uname):0;
+          if(me<0)me=0;
+        }
+        render();
+      }catch(e){}
+    }
+  }
+  else if(t==='relay-action'){
+    // Host received a relayed action from a non-host player
+    if(isHost){
+      try{
+        const action=JSON.parse(d.action);
+        apply(d.from, action);
+        commit();
+      }catch(e){}
+    }
+  }
+  else if(t==='game-cancelled'){
+    G=null;renderLobby();
+  }
+  else if(t==='player-status'){
+    // Update player connection status
+    if(d.seat!==undefined){
+      seats[d.seat]={...seats[d.seat],connected:d.connected};
+    }
+  }
+}
 async function sync(){
-  if(!tdoc)return;
+  if(!ws||ws.readyState!==WebSocket.OPEN)return;
   if(wr){dirty=true;return}
   wr=true;
-  try{await tdoc.set({host:uid,started:true,json:JSON.stringify(G)});syncErr=0}catch(e){syncErr=1}
-  wr=false;if(dirty){dirty=false;sync()}else if(syncErr){setTimeout(sync,3000);if(G)render()}
+  try{
+    wSend({type:'game-state',state:JSON.stringify(G)});
+    syncErr=0;
+  }catch(e){syncErr=1}
+  wr=false;
+  if(dirty){dirty=false;sync()}
+  else if(syncErr){setTimeout(sync,3000);if(G)render()}
 }
 function act(a){
   if(solo||isHost)return apply(me,a);
-  if(me<0||!tdoc)return;
-  tdoc.collection('moves').doc(String(me)).set({n:Date.now(),a:JSON.stringify(a)}).catch(()=>{});
+  if(me<0)return;
+  wSend({type:'action',a:JSON.stringify(a)});
 }
-async function joinT(){
-  const c=$('code').value.trim().toLowerCase().replace(/[^a-z0-9]/g,'');
-  if(!c)return;
-  try{
-    if(!window.claude)throw 0;
-    db=await claude.use('db');const user=await claude.use('user');
-    if(!db||!user)throw 0;
-    uid=await user.id();const v=await user.me();uname=cleanN(v&&v.name);
-    if(!uid)throw 0;
-  }catch(e){lmsg='Online tables are not available here. Sign in and open the shared artifact link, or play solo.';return renderLobby()}
-  code=c;tdoc=db.doc('tables/'+c);
-  const s=await tdoc.get();
-  if(!s.exists){await tdoc.set({host:uid,started:false,json:''});isHost=true}else isHost=s.data().host===uid;
-  tdoc.onSnapshot(onTable);
-  db.collection('tables/'+c+'/seats').onSnapshot(onSeats);
-  if(isHost)db.collection('tables/'+c+'/moves').onSnapshot(onMoves);
-  renderLobby();
+function joinT(){
+  const c=$('code').value.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(!c){lmsg='Enter a table code';return renderLobby()}
+  code=c;
+  if(!wsOnline)openWs();
+  if(wsOnline)wSend({type:'join-room',roomId:c,playerName:uname});
+  else{lmsg='Connecting...';render();setTimeout(()=>joinT(),1000)}
 }
-function onTable(snap){
-  const d=snap.exists?snap.data():null;if(!d)return;
-  if(d.started&&d.json){
-    if(isHost&&G)return;
-    G=JSON.parse(d.json);me=G.pid.indexOf(uid);
-    if(isHost)commit();else render();
-  }else if(!G)renderLobby();
-}
-function onSeats(snap){
-  seats=[null,null,null,null];
-  snap.docs.forEach(d=>{const x=d.data();if(x){x.name=cleanN(x.name);seats[+d.id]=x}});
-  if(!G)renderLobby();
-}
-function onMoves(snap){
-  snap.docChanges().forEach(ch=>{
-    if(ch.type==='removed')return;
-    const d=ch.doc.data(),s=+ch.doc.id;if(!d)return;
-    if(baseline){lastN[s]=d.n;return}
-    if(d.n>(lastN[s]||0)){lastN[s]=d.n;try{apply(s,JSON.parse(d.a))}catch(e){}}
-  });
-  baseline=false;
-}
-async function sit(i){
-  for(let j=0;j<4;j++)if(seats[j]&&seats[j].id===uid&&j!==i)await db.doc('tables/'+code+'/seats/'+j).delete();
-  await db.doc('tables/'+code+'/seats/'+i).set({id:uid,name:uname,av:myAv,t:Date.now()});
+function sit(i){
+  wSend({type:'sit',seat:i});
+  // Set avatar on server
+  wSend({type:'set-avatar',avatar:myAv});
 }
 function hostStart(){
-  me=seats.findIndex(s=>s&&s.id===uid);
-  if(me<0){lmsg='Take a seat first.';return renderLobby()}
-  const used=new Set(seats.filter(Boolean).map(s=>s.av|0));
-  G={pid:seats.map(s=>s?s.id:null),names:seats.map((s,i)=>s?s.name:BN[i]),bots:seats.map(s=>!s),av:seats.map(s=>s?(s.av|0):nextAv(used))};
-  newRound();commit();
+  if(seats.filter(s=>s).length<4){lmsg='Need 4 players';return renderLobby()}
+  wSend({type:'start-game'});
 }
 const SAVEK='g29solo';
 const hasSave=()=>{try{return !!localStorage.getItem(SAVEK)}catch(e){return false}};
@@ -562,18 +632,30 @@ function startSolo(){
 function renderLobby(){
   let h='<div class="logo"><b>29</b><span>♠<span class="r">♥♦</span>♣</span></div>';
   h+=avPicker();
-  if(!tdoc){
+  if(!tdoc&&!ws){
+    // No connection yet — show solo + code entry
     h+='<div class="lcard"><input id="code" placeholder="Table code" maxlength="12" aria-label="Table code"><div style="height:10px"></div><button class="pri" style="width:100%" onclick="joinT()">Create or join table</button></div>'+
     (hasSave()?'<button class="pri" onclick="resumeSolo()">Resume solo game</button>':'')+'<button class="gold" onclick="startSolo()">Play solo vs bots</button><button onclick="openSheet(true)">How to play</button>'+
     (lmsg?'<p class="note">'+lmsg+'</p>':'')+
-    '<p class="note">Online: share this artifact as Contributors and agree on a table code. The first person to use a new code is the host. Empty seats are played by bots.</p>';
-  }else{
+    '<p class="note">Online: agree on a table code with your friends. The first person to create it is the host. Empty seats are played by bots.</p>';
+  }else if(code){
+    // In a WebSocket room
     h+='<div class="lcard"><b>Table '+code+'</b>'+(isHost?' <small>you are the host</small>':'');
-    for(let i=0;i<4;i++){const s=seats[i],mine=s&&s.id===uid;
-      h+='<div class="seatrow"><span>Seat '+(i+1)+' <small>team '+(i%2?'B':'A')+'</small></span><span>'+(s?s.name+(mine?' (you)':''):'<small>empty, bot plays</small>')+'</span><button class="sm" onclick="sit('+i+')" '+(s&&!mine?'disabled':'')+'>Sit</button></div>';}
+    for(let i=0;i<4;i++){
+      const s=seats[i]||null;
+      const mine=s&&(typeof s.name==='string'&&s.name===uname);
+      const avImg=s?'<span class="pic" style="width:24px;height:24px;display:inline-block">'+avSvg(s.av||0)+'</span>':'';
+      h+='<div class="seatrow"><span>Seat '+(i+1)+' <small>team '+(i%2?'B':'A')+'</small></span><span>'+(s?avImg+s.name+(mine?' (you)':'')+(s.connected===false?' (away)':''):'<small>empty, bot plays</small>')+'</span><button class="sm" onclick="sit('+i+')" '+(s&&!mine?'disabled':'')+'>Sit</button></div>';
+    }
     h+='<p class="note" style="margin-top:8px">Seats 1 and 3 are partners, as are seats 2 and 4.</p></div>';
     h+=isHost?'<button class="pri" onclick="hostStart()">Start game</button>':'<p class="note">Waiting for the host to start.</p>';
     if(lmsg)h+='<p class="note">'+lmsg+'</p>';
+  }else{
+    // Online mode without a room yet
+    h+='<div class="lcard"><input id="code" placeholder="Table code" maxlength="12" aria-label="Table code"><div style="height:10px"></div><button class="pri" style="width:100%" onclick="joinT()">Create or join table</button></div>'+
+    (hasSave()?'<button class="pri" onclick="resumeSolo()">Resume solo game</button>':'')+'<button class="gold" onclick="startSolo()">Play solo vs bots</button><button onclick="openSheet(true)">How to play</button>'+
+    (lmsg?'<p class="note">'+lmsg+'</p>':'')+
+    '<p class="note">Agree on a table code with your friends. The first person to join creates the room. Empty seats are played by bots.</p>';
   }
   $('lobby').innerHTML=h;
 }
@@ -694,6 +776,7 @@ function avPicker(){
 async function setAv(i){
   myAv=i;try{localStorage.setItem('av29',i)}catch(e){}
   if(tdoc){const j=seats.findIndex(s=>s&&s.id===uid);if(j>=0)try{await db.doc('tables/'+code+'/seats/'+j).set({id:uid,name:uname,av:myAv,t:Date.now()})}catch(e){}}
+  if(ws&&ws.readyState===WebSocket.OPEN)wSend({type:'set-avatar',avatar:myAv});
   const v=$('code')&&$('code').value;renderLobby();if(v&&$('code'))$('code').value=v;
 }
 /* ===== sound effects (synthesised in the browser, no audio files) ===== */
