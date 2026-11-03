@@ -288,8 +288,8 @@ async def websocket_handler(request):
                 if room['game_state'] is not None:
                     await _send(ws, {'type': 'room-error', 'message': 'A round is already in progress'})
                     continue
-                if sum(1 for s in room['seats'] if s is not None) < 4:
-                    await _send(ws, {'type': 'room-error', 'message': '4 players are required to start'})
+                if sum(1 for s in room['seats'] if s is not None) < 2:
+                    await _send(ws, {'type': 'room-error', 'message': 'At least 2 players are required to start'})
                     continue
                 room['game_state'] = ''       # empty string = v10 will initialise
                 room['game_id'] += 1

@@ -636,7 +636,7 @@ function joinTeam(t){
   for(let i=0;i<4;i++){if(seats[i]===null){wSend({type:'sit',seat:i});return}}
 }
 function hostStart(){
-  if(seats.filter(s=>s).length<4){lmsg='Need 4 players';return renderLobby()}
+  if(seats.filter(s=>s).length<2){lmsg='Need at least 2 players';return renderLobby()}
   wSend({type:'start-game'});
 }
 const SAVEK='g29solo';
