@@ -408,10 +408,28 @@ async def websocket_handler(request):
     return ws
 
 
+# ── Middleware: no-cache for HTML ──────────────────────────────────
+
+async def no_cache_middleware(app, handler):
+    """Prevent browser caching so back-button always loads fresh page."""
+    async def middleware(request):
+        response = await handler(request)
+        if hasattr(response, 'headers') and 'text/html' in (response.content_type or ''):
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+        return response
+    return middleware
+
+
 # ── Static files ───────────────────────────────────────────────────
 
 async def index(request):
-    return web.FileResponse(STATIC_DIR / '29_Card_Game_v10.html')
+    resp = web.FileResponse(STATIC_DIR / '29_Card_Game_v10.html')
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 
 def create_app():
@@ -419,6 +437,7 @@ def create_app():
     app.router.add_get('/ws', websocket_handler)
     app.router.add_get('/', index)
     app.router.add_static('/', STATIC_DIR, name='static')
+    app.middlewares.append(no_cache_middleware)
     return app
 
 

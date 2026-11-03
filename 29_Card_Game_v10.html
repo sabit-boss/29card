@@ -613,7 +613,8 @@ function joinT(){
   else{lmsg='Connecting...';render();setTimeout(()=>joinT(),1000)}
 }
 function generateCode(){
-  code=''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789',k=6));
+  const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  code=Array.from({length:6},()=>chars[Math.floor(Math.random()*chars.length)]).join('');
   renderLobby();
 }
 function sit(i){
@@ -677,9 +678,9 @@ function renderLobby(){
   }else{
     // Not in a room yet — show lobby with code entry
     h+='<div class="lcard">';
-    h+='<div class="form-group" style="margin-bottom:12px"><label style="display:block;text-align:left;margin-bottom:4px;font-size:14px">Your Name</label><input id="playerName" placeholder="Enter your name" maxlength="16" style="width:100%;text-align:center"></div>';
+    h+='<div class="form-group" style="margin-bottom:12px"><label style="display:block;text-align:left;margin-bottom:4px;font-size:14px">Your Name</label><input id="playerName" value="'+(uname||'')+'" placeholder="Enter your name" maxlength="16" style="width:100%;text-align:center"></div>';
     h+='<div style="display:flex;gap:6px;margin-bottom:8px">';
-    h+='<input id="code" placeholder="Table code" maxlength="8" style="flex:1;text-align:center;text-transform:uppercase;letter-spacing:2px;font-weight:700" aria-label="Table code">'+
+    h+='<input id="code" value="'+(code||'')+'" placeholder="Table code" maxlength="8" style="flex:1;text-align:center;text-transform:uppercase;letter-spacing:2px;font-weight:700" aria-label="Table code">'+
     '<button class="sm" onclick="generateCode()" style="padding:0 14px" aria-label="Generate code">🎲</button>';
     h+='</div>';
     h+='<button class="pri" style="width:100%;margin-bottom:8px" onclick="joinT()">Create or join table</button>';
